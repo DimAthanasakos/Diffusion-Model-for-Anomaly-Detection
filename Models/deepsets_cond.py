@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.nn.functional
 
 
 class DeepSetsAtt(nn.Module):
@@ -35,8 +35,12 @@ class DeepSetsAtt(nn.Module):
 
         # Transformer blocks
         # Define a series of ModuleLists where each index corresponds to a particular transformer layer
+        print(f'defining transformer layers')
+        print(f'num_feat={num_feat}, time_embedding_dim={time_embedding_dim}, projection_dim={projection_dim}')
+        print(f'num_heads={num_heads}, num_transformer={num_transformer}')
+        print()
         self.transformer_norms_1 = nn.ModuleList([nn.LayerNorm(projection_dim) for _ in range(num_transformer)])
-        self.transformer_attn = nn.ModuleList([nn.MultiheadAttention(projection_dim, num_heads, batch_first=True) for _ in range(num_transformer)])
+        self.transformer_attn = nn.ModuleList([nn.MultiheadAttention(embed_dim=projection_dim, num_heads=num_heads, batch_first=True) for _ in range(num_transformer)])
         self.transformer_norms_2 = nn.ModuleList([nn.LayerNorm(projection_dim) for _ in range(num_transformer)])
         self.transformer_fc1 = nn.ModuleList([nn.Linear(projection_dim, 4*projection_dim) for _ in range(num_transformer)])
         self.transformer_fc2 = nn.ModuleList([nn.Linear(4*projection_dim, projection_dim) for _ in range(num_transformer)])
@@ -55,19 +59,24 @@ class DeepSetsAtt(nn.Module):
         mask: [B, N, 1] binary mask where 1 means valid, 0 means padded
         """
         B, N, F = inputs.shape
+        print(f'==================')
+        print(f'Forward DeepSetsAtt: inputs.shape={inputs.shape}')
+        print(f'==================')
 
-        if mask is None:
-            mask = torch.ones(B, N, 1, dtype=inputs.dtype, device=inputs.device)
-
+    
         # Apply initial projection to inputs
         x = self.input_fc(inputs)  # [B, N, projection_dim]
         x = self.input_act(x)
+        print(f'Forward DeepSetsAtt: x.shape={x.shape}')
 
         # Process time embedding
         t = self.time_fc(time_embedding) # [B, projection_dim]
         t = self.time_act(t)
+        print(f'Forward DeepSetsAtt: t.shape={t.shape}')
+
         # Repeat time along N dimension
         t = t.unsqueeze(1).repeat(1, N, 1)  # [B, N, projection_dim]
+        print(f'Forward DeepSetsAtt: t.shape={t.shape}')
 
         # Concat masked_features and time
         concat = torch.cat([x, t], dim=-1)  # [B, N, 2*projection_dim]
@@ -81,36 +90,47 @@ class DeepSetsAtt(nn.Module):
         # Create mask matrix [B, N, N]
         # Original code: mask_matrix = mask * mask.transpose
         # mask: [B,N,1], mask.transpose: [B,1,N], product: [B,N,N]
-        mask_matrix = torch.matmul(mask, mask.transpose(1,2))  # [B,N,N]
+        if mask:
+            mask_matrix = torch.matmul(mask, mask.transpose(1,2))  # [B,N,N]
+        
+            # Convert mask_matrix to attention mask
+            # In TensorFlow, attention_mask=True means attend, False means don't.
+            # In PyTorch MultiheadAttention, attn_mask is usually additive or boolean:
+            # According to docs, attn_mask can be a bool tensor where True means NOT allowed.
+            # We have mask_matrix=1 where allowed. We want True where disallowed: mask_out = mask_matrix==0
+            # We'll use bool mask and rely on PyTorch 1.12+ that supports bool attn_mask with batch_first=True
+            attn_mask = (mask_matrix == 0)  # True where we cannot attend
+        else:
+            attn_mask = None
 
-        # Convert mask_matrix to attention mask
-        # In TensorFlow, attention_mask=True means attend, False means don't.
-        # In PyTorch MultiheadAttention, attn_mask is usually additive or boolean:
-        # According to docs, attn_mask can be a bool tensor where True means NOT allowed.
-        # We have mask_matrix=1 where allowed. We want True where disallowed: mask_out = mask_matrix==0
-        # We'll use bool mask and rely on PyTorch 1.12+ that supports bool attn_mask with batch_first=True
-        attn_mask = (mask_matrix == 0)  # True where we cannot attend
+        #print(f'Forward DeepSetsAtt: attn_mask.shape={attn_mask.shape}')
 
         # Transformer layers
         for i in range(self.num_transformer):
             # Norm
             x1 = self.transformer_norms_1[i](encoded_patches)  # [B, N, projection_dim]
-
+            print(f'Forward DeepSetsAtt: x1.shape={x1.shape}')
+            print(f'num_heads={self.num_heads}, projection_dim={self.projection_dim}')
             # Multi-head Attention
             # MultiheadAttention in PyTorch expects shape [B, N, D] if batch_first=True
             # attn_mask shape [B, N, N], True means no attention
-            attn_output, _ = self.transformer_attn[i](x1, x1, x1, attn_mask=attn_mask)
+            attn_output, _ = self.transformer_attn[i](query=x1, key=x1, value=x1, attn_mask=attn_mask)
+            print(f'Forward DeepSetsAtt: attn_output.shape={attn_output.shape}')
 
             # Skip connection
             x2 = encoded_patches + attn_output
-
+            print(f'Forward DeepSetsAtt: x2.shape={x2.shape}')
             # Second norm
             x3 = self.transformer_norms_2[i](x2)
+            print(f'Forward DeepSetsAtt: x3.shape={x3.shape}')
             # MLP
             x3 = self.transformer_fc1[i](x3)
-            x3 = F.gelu(x3)
+            print(f'Forward DeepSetsAtt: x3.shape={x3.shape}')
+
+            x3 = torch.nn.functional.gelu(x3) 
             x3 = self.transformer_fc2[i](x3)
-            x3 = F.gelu(x3)
+            x3 = torch.nn.functional.gelu(x3)
+            print(f'Forward DeepSetsAtt: x3.shape={x3.shape}')
 
             # Another skip connection
             encoded_patches = x2 + x3

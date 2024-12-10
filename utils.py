@@ -8,7 +8,6 @@ from matplotlib import gridspec
 import matplotlib.ticker as mtick
 from sklearn.utils import shuffle
 import torch
-from torch.utils.data import TensorDataset, DataLoader
 import pandas as pd
 import energyflow as ef
 
@@ -475,12 +474,12 @@ def DataLoader(data_path,file_name,
         test_mask_t = torch.from_numpy(test_mask)
 
         # Create TensorDatasets
-        train_dataset = TensorDataset(train_particles_t, train_jets_t, train_mjj_t, train_mask_t)
-        test_dataset = TensorDataset(test_particles_t, test_jets_t, test_mjj_t, test_mask_t)
+        train_dataset = torch.utils.data.TensorDataset(train_particles_t, train_jets_t, train_mjj_t, train_mask_t)
+        test_dataset = torch.utils.data.TensorDataset(test_particles_t, test_jets_t, test_mjj_t, test_mask_t)
 
         # Create DataLoaders
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
 
         return data_size, train_loader, test_loader
   
