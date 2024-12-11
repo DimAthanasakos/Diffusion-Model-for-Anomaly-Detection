@@ -12,7 +12,6 @@ import utils
 
 torch.manual_seed(1233)
 
-
 def logsnr_schedule_cosine(t, logsnr_min=-20., logsnr_max=20.):
     # t: [B,1]
     logsnr_max = torch.tensor(logsnr_max, dtype=torch.float32)  # Convert to tensor
@@ -59,9 +58,20 @@ def compute_loss(model, part, jet, cond, mask, device):
     _, alpha, sigma = get_logsnr_alpha_sigma(random_t, shape=(B,1,1))
     z = torch.randn_like(jet)
     perturbed_x = alpha*jet + z*sigma
+    print(f'=============================')
+    print(f'JET FORWARD')
+    print()
+    #print(f'perturbed_x.shape:{perturbed_x.shape}')
+    print(f'perturbed_x[:2]:{perturbed_x[:1]}')
     pred_jet = model.forward_jet(perturbed_x, random_t, cond)  # Similar to self.model_jet([perturbed_x, random_t, cond])
+    #print(f'pred_jet.shape:{pred_jet.shape}')
+    print(f'pred_jet[:2]:{pred_jet[:1]}')
     v_jet = alpha*z - sigma*jet
+    #print(f'v_jet.shape:{v_jet.shape}')
     loss_jet = F.mse_loss(pred_jet, v_jet)
+    print(f'loss_jet:{loss_jet}')
+    print()
+    print()
 
     # For parts:
     # 1) Reshape part and mask:
@@ -88,16 +98,49 @@ def compute_loss(model, part, jet, cond, mask, device):
 
     z = torch.randn_like(part_reshaped)*mask_reshaped
     perturbed_x = alpha*part_reshaped + z*sigma
+    print(f'=============================')
+    print(f'PARTICLE FORWARD')
+    print()
+    print(f'perturbed_x[:1, :10]:{perturbed_x[:1, :10]}')
     pred_part = model.forward_part(perturbed_x*mask_reshaped, random_t, jet_reshaped, cond_reshaped, mask_reshaped)
+    print()
+    print()
+    print(f'pred_part.shape:{pred_part.shape}')
+    print(f'pred_part[:1, :10]:{pred_part[:1, :10]}')
+    if torch.isnan(pred_part).any():
+        print("NaN detected in pred_part")
+    if torch.isinf(pred_part).any():
+        print("Inf detected in pred_part")
+    print()
+    print()
     v = alpha*z - sigma*part_reshaped
+    print(f'v.shape:{v.shape}')
+    print(f'v[:1, :10]:{v[:1, :10]}')
+    if torch.isnan(v).any():
+        print("NaN detected in v")
+    if torch.isinf(v).any():
+        print("Inf detected in v")
+    print()
     # Compute masked MSE
     losses = (pred_part - v)**2 * mask_reshaped
+    print(f'losses.shape:{losses.shape}')
+    print(f'losses[:1, :10]:{losses[:1, :10]}')
+    print()
+
     loss_part = losses.mean()
+    print(f'loss_part.shape:{loss_part.shape}')
+    print(f'loss_part:{loss_part}')
+    print(f'loss_part[:1, :10]:{loss_part[:1, :10]}')
+    print()
+
 
     return loss_jet, loss_part
 
 
 def evaluate(model, test_loader, device):
+    print()
+    print('Evaluating...')
+    print()
     model.eval()
     total_loss = 0
     count = 0
@@ -204,6 +247,10 @@ if __name__ == "__main__":
     no_improve_count = 0
 
     for epoch in range(config['MAXEPOCH']):
+        print()
+        print(f'=============================')
+        print(f'EPOCH {epoch+1}/{config["MAXEPOCH"]}')
+        print(f'=============================')
         model.train()
         epoch_loss = 0
         count = 0
@@ -211,15 +258,26 @@ if __name__ == "__main__":
 
         for index, batch in enumerate(train_loader):
             part, jet, cond, mask = [x.to(device) for x in batch]
-            print(f'batch:{index}')
+            print(f'=============================')
+            print()
+            print()
+            print(f'BATCH:{index}')
+            for param_group in optimizer.param_groups:
+                print(f"Learning Rate: {param_group['lr']}")
             print(f'part:{part.shape}')
             print(f'jet:{jet.shape}')
             print(f'cond:{cond.shape}')
             print(f'mask:{mask.shape}')
-            print(f'=============================')
+            print()
+            print(f'mask[:1, :5, :5]:{mask[:1, :5, :5]}')
+            print()
             optimizer.zero_grad()
             loss_jet, loss_part = compute_loss(model, part, jet, cond, mask, device)
             loss = loss_jet + loss_part
+            print(f'loss_jet:{loss_jet}')
+            print(f'loss_part:{loss_part}')
+            print(f'loss:{loss}')
+            print()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
@@ -227,13 +285,14 @@ if __name__ == "__main__":
             epoch_loss += loss.item() * part.size(0)
             count += part.size(0)
             scheduler.step()
-
+        time.sleep(10)
         epoch_loss = epoch_loss / count
         # Average metrics across workers if needed:
         epoch_loss_tensor = torch.tensor(epoch_loss, device=device)
         epoch_loss = epoch_loss_tensor.item()
 
         # Validation
+        time.sleep(10)
         val_loss = evaluate(model, test_loader, device)
         val_loss_tensor = torch.tensor(val_loss, device=device)
         val_loss = val_loss_tensor.item()

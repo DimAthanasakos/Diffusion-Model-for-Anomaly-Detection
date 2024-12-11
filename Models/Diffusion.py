@@ -4,9 +4,11 @@ import torch.nn.functional as F
 import numpy as np
 import math 
 from Models.deepsets_cond import DeepSetsAtt
+import time
 
 
 
+torch.manual_seed(1233)
 
 ######################################
 # Helper Functions
@@ -20,6 +22,7 @@ def GaussianFourierProjection(num_embed, scale=16.0, device='cpu'):
 
 
 def base_Embedding(inputs, projection):
+
     angle = inputs * projection.unsqueeze(0) * 1000.0  # broadcasting
     sin_angle = torch.sin(angle)        # Compute sine
     cos_angle = torch.cos(angle)        # Compute cosine
@@ -115,7 +118,7 @@ class GSGM(nn.Module):
         # FF layers for cond
         # We must know shape after FF; 
         cond_ff_dim = self.num_cond * (1 + 2*(self.max_proj-self.min_proj))
-        print(f'cond_ff_dim: {cond_ff_dim}')
+        #print(f'cond_ff_dim: {cond_ff_dim}')
         self.cond_fc1 = nn.Linear(cond_ff_dim, 2*self.num_embed)
         self.cond_fc2 = nn.Linear(2*self.num_embed, self.num_embed)
 
@@ -128,25 +131,25 @@ class GSGM(nn.Module):
             num_feat=self.num_feat,
             time_embedding_dim=3*self.num_embed,
             num_heads=2,
-            num_transformer=6,
+            num_transformer=1,
             projection_dim=128,
             use_dist=False
         )
 
-        print(f'model_part')
-        print(self.model_part_att)
+        #print(f'model_part')
+        #print(self.model_part_att)
 
         self.model_jet_att = DeepSetsAtt(
             num_feat=self.num_jet,
             time_embedding_dim=2*self.num_embed,
             num_heads=2,
-            num_transformer=6,
+            num_transformer=1,
             projection_dim=128,
             use_dist=False
         )
-        print()
-        print(f'model_jet')
-        print(self.model_jet_att)
+        #print()
+        #print(f'model_jet')
+        #print(self.model_jet_att)
 
         self.ema_jet = None
         self.ema_part = None
@@ -155,37 +158,55 @@ class GSGM(nn.Module):
 
     def embed_time(self, t):
         # t: [B,1]
+        print(f'embed time')
+        #print(f't shape: {t.shape}')
+        #print(f't[:2]: {t[:1]}')
+        #print(f'self.projection[:2]: {self.projection[:1]}')
+        print()
         emb = base_Embedding(t, self.projection) # [B, 2*num_embed] (since sin+cos)
-        emb = self.activation(self.emb_fc1(emb))
+        #print(f'emb shape: {emb.shape}')
+        print(f'emb[:1, :10]: {emb[:1, :10]}')
+        print(f'before emb_fc1')
+        print()
+        emb = self.activation(self.emb_fc1(emb)) 
+        
+        print(f'after emb_fc1')
+        #print(f'emb shape: {emb.shape}')
+        print(f'emb[:1, :10]: {emb[:1, :10]}')
+        print()
+        #time.sleep(5)
+        
         emb = self.activation(self.emb_fc2(emb)) # [B,num_embed]
+        #print(f'emb shape: {emb.shape}')
+        #print(f'emb[:2]: {emb[:1]}')
         return emb
 
 
 
     def forward_conditional_embeddings(self, t, cond, jet):
         # t: [B,1], cond: [B,num_cond], jet: [B,num_jet]\
-        print()
-        print(f'forward_conditional_embeddings: t shape: {t.shape}, cond shape: {cond.shape}, jet shape: {jet.shape}')
-        print()
+        #print()
+        #print(f'forward_conditional_embeddings: t shape: {t.shape}, cond shape: {cond.shape}, jet shape: {jet.shape}')
+        #print()
         t_emb = self.embed_time(t)   # this is the graph_conditional = jet_conditional of the original code
-        print(f't_emb shape: {t_emb.shape}')
+        #print(f't_emb shape: {t_emb.shape}')
 
         jet_dense = self.jet_fc1(jet)
-        #jet_dense = self.activation(jet_dense)              # In the original code, this is not activated. Unintented ? 
+        #jet_dense = self.activation(jet_dense)              # In the original code, this is not activated. Unintended ? 
         jet_dense = self.activation(self.jet_fc2(jet_dense)) # [B,num_embed]
 
         cond_ff = FF(cond, device=self.device) # [B, cond_ff_dim], we assumed cond_ff_dim = num_cond*9
         cond_dense = self.cond_fc1(cond_ff)
-        #cond_dense = self.activation(cond_dense)              # In the original code, this is not activated. Unintented ?
+        #cond_dense = self.activation(cond_dense)              # In the original code, this is not activated. Unintended ?
         cond_dense = self.activation(self.cond_fc2(cond_dense)) # [B,num_embed]
 
-        print(f't_emb shape: {t_emb.shape}, jet_dense shape: {jet_dense.shape}, cond_dense shape: {cond_dense.shape}')
+        #print(f't_emb shape: {t_emb.shape}, jet_dense shape: {jet_dense.shape}, cond_dense shape: {cond_dense.shape}')
         graph_concat = torch.cat([t_emb, jet_dense, cond_dense], dim=-1) # [B,3*num_embed]
         graph_conditional = self.activation(self.graph_fc(graph_concat)) # [B,3*num_embed]
 
         jet_concat = torch.cat([t_emb, cond_dense], dim=-1) # [B,2*num_embed]
-        print(f't_emb shape: {t_emb.shape}, cond_dense shape: {cond_dense.shape}')
-        print(f'jet_concat shape: {jet_concat.shape}')
+        #print(f't_emb shape: {t_emb.shape}, cond_dense shape: {cond_dense.shape}')
+        #print(f'jet_concat shape: {jet_concat.shape}')
         jet_conditional = self.activation(self.jet_cond_fc(jet_concat)) # [B,2*num_embed]
 
         return graph_conditional, jet_conditional
@@ -208,56 +229,113 @@ class GSGM(nn.Module):
         jet = jet.reshape(-1, self.num_jet)  
         mask = mask.reshape(-1, self.max_part, 1)  
         # expand cond along the batch dimension
-        cond = cond.unsqueeze(1)
-        cond = cond.repeat(1,2).reshape(-1, self.num_cond) 
+
+        #print(f'part shape: {part.shape}')
+        #print(f'jet shape: {jet.shape}')
+        #print(f'mask shape: {mask.shape}')
+        #print(f'cond shape: {cond.shape}')
+        #cond = cond.repeat(2, 1)  # Shape: (2B, num_cond)
+
+        #cond = cond.unsqueeze(1)
+
+        #print(f'cond shape: {cond.shape}')
+        #print(f'self.num_cond = {self.num_cond}')
+        #cond = cond.repeat(1,2).reshape(-1, self.num_cond) 
 
         t_emb = self.embed_time(t) 
+        print(f'after embed_time inside forward_part: ')
+        print(f't_emb[:1, :10]: {t_emb[:1, :10]}')
+        print()
         jet_dense = self.jet_fc1(jet)
+        print(f'jet_dense[:1, :10]: {jet_dense[:1, :10]}')
+        print()
         #jet_dense = self.activation(jet_dense)              # In the original code, this is not activated. Unintented ? 
         jet_dense = self.activation(self.jet_fc2(jet_dense)) # [B,num_embed]
+        print(f'jet_dense[:1, :10]: {jet_dense[:1, :10]}')
+        print()
 
         cond_ff = FF(cond, device=self.device) # [B, cond_ff_dim], we assumed cond_ff_dim = num_cond*9
+        print(f'cond_ff[:1, :10]: {cond_ff[:1, :10]}')
+        print()
+
         cond_dense = self.cond_fc1(cond_ff)
+        print(f'cond_dense[:1, :10]: {cond_dense[:1, :10]}')
+        print()
+
         #cond_dense = self.activation(cond_dense)              # In the original code, this is not activated. Unintented ?
         cond_dense = self.activation(self.cond_fc2(cond_dense)) # [B,num_embed]
+        print(f'cond_dense[:1, :10]: {cond_dense[:1, :10]}')
+        print()
 
         graph_concat = torch.cat([t_emb, jet_dense, cond_dense], dim=-1) # [B,3*num_embed]
         graph_conditional = self.activation(self.graph_fc(graph_concat)) # [B,3*num_embed]
         print(f'graph_conditional shape: {graph_conditional.shape}')
-
+        print(f'graph_conditional[:1, :10]: {graph_conditional[:1, :10]}')
+        print()
+        
+        print(f'mask shape: {mask.shape}')
+        print(f'mask[:1, :5, :5]: {mask[:1, :5, :5]}')
         part_out = self.model_part_att(part, graph_conditional, mask=mask) # [B,N,num_feat]
+        print(f'part_out shape: {part_out.shape}')
+        print(f'part_out[:1, :10]: {part_out[:1, :10]}')
+        if torch.isnan(part_out).any():
+            print()
+            print('WARNING')
+            print(f'part_out has NaNs')
+            print()
+        if torch.isinf(part_out).any():
+            print(f'part_out has Infs')
+
+        print()
 
         return part_out
 
 
 
     def forward_jet(self, jet, t, cond): 
-        print()
-        print(f'forward_jet: t shape: {t.shape}, jet shape: {jet.shape}, cond shape: {cond.shape}')
-        print()
+        #print()
+        #print(f'forward_jet: t shape: {t.shape}, jet shape: {jet.shape}, cond shape: {cond.shape}')
+        #print()
         # ensure that everything is on the same device 
         t = t.to(self.device)
         cond = cond.to(self.device)
         jet = jet.to(self.device)
+        print()
+        print(f'forward jet')
+        #print(f'jet[:2]: {jet[:1]}')
+        #print(f't[:2]: {t[:1]}')
+        #print(f'cond[:2]: {cond[:1]}')
+        #print()
         
         t_emb = self.embed_time(t)   # this is the graph_conditional = jet_conditional of the original code
+        #print(f't_emb shape: {t_emb.shape}')
+        #print(f't_emb[:2]: {t_emb[:1]}')
+        #print()
         cond_ff = FF(cond, device=self.device) # [B, cond_ff_dim], we assumed cond_ff_dim = num_cond*9
         cond_dense = self.cond_fc1(cond_ff)
         #cond_dense = self.activation(cond_dense)              # In the original code, this is not activated. Unintented ?
         cond_dense = self.activation(self.cond_fc2(cond_dense)) # [B,num_embed]
 
         jet_concat = torch.cat([t_emb, cond_dense], dim=-1) 
-        print(f't_emb shape: {t_emb.shape}, cond_dense shape: {cond_dense.shape}')
-        print(f'jet_concat shape: {jet_concat.shape}')
+        #print(f't_emb shape: {t_emb.shape}, cond_dense shape: {cond_dense.shape}')
+        #print(f'jet_concat shape: {jet_concat.shape}')
         jet_conditional = self.activation(self.jet_cond_fc(jet_concat)) # [2*B,2*num_embed]
-        print(f'jet_conditional shape: {jet_conditional.shape}')
-        print()
+        #print(f'jet_conditional shape: {jet_conditional.shape}')
+        #print('jet_conditional[:2]: ', jet_conditional[:1])
+        #print(f't_emb[:2]: {t_emb[:1]}')
+        #print(f'cond_dense[:2]: {cond_dense[:1]}')
+        #print()
 
 
         # jet: [B,num_jet] -> [B,1,num_jet]
         #jet_inp = jet.unsqueeze(1)
         jet_out = self.model_jet_att(jet, jet_conditional, mask=None) # [B,1,num_jet]
+        #print(f'jet_out shape: {jet_out.shape}')
+        #print('jet_out[:2]: ', jet_out[:1])
         jet_out = jet_out.squeeze(1) # [B,num_jet]
+        #print(f'jet_out shape: {jet_out.shape}')
+        #print('jet_out[:2]: ', jet_out[:1])
+        #print()
         return jet_out
 
 
