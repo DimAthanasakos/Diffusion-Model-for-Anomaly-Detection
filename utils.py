@@ -290,7 +290,7 @@ def ReversePrep(particles,jets,mjj,npart,norm=None):
     jets[:,3] = np.exp(jets[:,3])*mask_mass*mjj_tile
     
     particles[:,0] = 1.0 - np.exp(particles[:,0])
-    particles[:,0] = np.clip(particles[:,0],2.5349376295699686e-05,1.0) #apply min pt cut
+    particles[:,0] = np.clip(particles[:,0],2.5349376295699686e-05,1.0) #apply min pt cut 
 
         
     return (particles*mask).reshape(batch_size,2,num_part,-1),jets.reshape(batch_size,2,-1)
@@ -315,7 +315,6 @@ def prep_mjj(mjj,mjjmin=2300,mjjmax=5000):
     new_mjj = (np.log(mjj) - np.log(mjjmin))/(np.log(mjjmax) - np.log(mjjmin))
     new_mjj = 2*new_mjj -1.0
     return new_mjj
-
 
 
 
