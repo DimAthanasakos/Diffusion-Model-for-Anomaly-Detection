@@ -438,6 +438,7 @@ def DataLoader(data_path,file_name,
 
     if rank == 0:
         print(f'After masking with use_SR: {use_SR} : data_size: {data_size}')
+        print()
 
     particles, jets = _preprocessing(particles, jets, mjj)
 

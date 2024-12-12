@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional
 import time
-
+import sys
 
 torch.manual_seed(1233)
 
@@ -63,23 +63,13 @@ class DeepSetsAtt(nn.Module):
         """
         B, N, F = inputs.shape
        
-        print()
-        print(f'===================================================')
-        print(f'Forward DeepSetsAtt: inputs.shape={inputs.shape}')
-        print()
-        
-    
         # Apply initial projection to inputs
         x = self.input_fc(inputs)  # [B, N, projection_dim]
         x = self.input_act(x)
-        print(f'Forward DeepSetsAtt: x.shape={x.shape}')
-        print(f'x[:1, :5, :5]: {x[:1,  :5, :5]}')
 
         # Process time embedding
         t = self.time_fc(time_embedding) # [B, projection_dim]
         t = self.time_act(t)
-        print(f'Forward DeepSetsAtt: t.shape={t.shape}')
-        print(f't[:1, :5]: {t[:1, :5]}')
 
         # Repeat time along N dimension
         t = t.unsqueeze(1).repeat(1, N, 1)  # [B, N, projection_dim]
@@ -90,9 +80,7 @@ class DeepSetsAtt(nn.Module):
         concat = self.concat_act1(concat)
         tdd = self.concat_fc2(concat)  # [B, N, projection_dim]
 
-        print(f'Forward DeepSetsAtt: tdd.shape={tdd.shape}')
-        print(f'tdd[:1, :5,  :5]: {tdd[:1, :5,  :5 ]}')
-        print()
+
 
         # encoded_patches starts as tdd
         encoded_patches = tdd
@@ -101,27 +89,26 @@ class DeepSetsAtt(nn.Module):
         # Original code: mask_matrix = mask * mask.transpose
         # mask: [B,N,1], mask.transpose: [B,1,N], product: [B,N,N]
         if mask is not None:
+            #print(f'mask.shape={mask.shape}')
+            #print()
+            #print(f'mask[0,:55]: {mask[0, :55]}')
             mask_matrix = torch.matmul(mask, mask.transpose(1,2))  # [B,N,N]
+            #print(f'mask_matrix.shape={mask_matrix.shape}')
+            #print()
+            #print(f'mask_matrix[0, :55, :55]: {mask_matrix[0, :55, :55]}')
             # Pytorch MultiheadAttention expects attn_mask to be of shape [batch_size * num_heads, ...]
             # so we repeat the mask_matrix num_heads times
             mask_matrix = mask_matrix.unsqueeze(1).repeat(1, self.num_heads, 1, 1)
             mask_matrix = mask_matrix.view(-1, mask_matrix.size(-2), mask_matrix.size(-1))
+            #print(f'mask_matrix.shape={mask_matrix.shape}')            
+            #print()
+            #print(f'mask_matrix[0, :55, :55]: {mask_matrix[0, :55, :55]}')
+
             # Convert mask_matrix to attention mask
-            attn_mask = (mask_matrix == 0)  # True where we cannot attend
-            print(f'Forward DeepSetsAtt: attn_mask.shape={attn_mask.shape}')
-            print(f'attn_mask[:1, :5, :5]: {attn_mask[:1, :5, :5]}')
-            print()
-            # check if attn__mask has any true values 
-            if attn_mask.any():
-                print()
-                print('WARNING')
-                print(f'attn_mask has True values')
-                print()
-            if torch.isnan(attn_mask).any():
-                print()
-                print('WARNING')
-                print(f'attn_mask has NaNs')
-                print()
+            attn_mask = mask_matrix.clone()
+            attn_mask[attn_mask != 0] = float('-inf')
+            attn_mask[attn_mask == 0] = 0.0
+
             
         else:
             attn_mask = None
@@ -131,73 +118,101 @@ class DeepSetsAtt(nn.Module):
         # Transformer layers
         for i in range(self.num_transformer):
             # Norm
-            print(f'=================')
-            print(f'transformer layer {i}')
-            print(f'encoded_patches.shape={encoded_patches.shape}')
-            print(f'encoded_patches[:1, :5, :5]: {encoded_patches[:1, :5, :5]}')
-            print()
+            #print(f'=================')
+            #print(f'transformer layer {i}')
+            #print(f'encoded_patches.shape={encoded_patches.shape}')
+            #print(f'encoded_patches[:1, :5, :5]: {encoded_patches[:1, :5, :5]}')
+            #print()
             x1 = self.transformer_norms_1[i](encoded_patches)  # [B, N, projection_dim]
-            print(f'x1.shape={x1.shape}')
-            print(f'x1[:1, :5, :5]: {x1[:1, :5, :5]}')
-            if torch.isnan(x1).any():
-                print()
-                print('WARNING')
-                print(f'x1 has NaNs')
-                print()
-            if torch.isinf(x1).any():
-                print()
-                print('WARNING')
-                print(f'x1 has Infs')
-                print()
+            #print(f'x1.shape={x1.shape}')
+            #print(f'x1[:1, :5, :5]: {x1[:1, :5, :5]}')
 
             # Multi-head Attention
             attn_output, _ = self.transformer_attn[i](query=x1, key=x1, value=x1, attn_mask=attn_mask)
-            print()
-            print(f'attn_output.shape={attn_output.shape}')
-            print(f'attn_output[:1, :5, :5]: {attn_output[:1, :5, :5]}')
 
-            if torch.isnan(attn_output).any():
+            if False and torch.isnan(attn_output).any():
                 print()
                 print('WARNING')
                 print(f'attn_output has NaNs')
+                print()            
+                # Create a boolean mask where True indicates a NaN
+                nan_mask = torch.isnan(attn_output)
+
+                # Get the indices of NaN values
+                nan_indices = nan_mask.nonzero(as_tuple=False)
+
+                # Print the number of NaNs found
+                num_nans = nan_indices.size(0)
+                print(f"Total NaN values found in attn_output: {num_nans}")
+                print(f'total number of elements in attn_output: {attn_output.numel()}')
                 print()
+                print(f"Indices of NaN values:")
+                print(nan_indices)
+                nan_mask0 = torch.isnan(attn_output[0])
+
+                # Get the indices of NaN values
+                nan_indices = nan_mask0.nonzero(as_tuple=False)
+
+                # Print the number of NaNs found
+                num_nans = nan_indices.size(0)
+                print(f"Total NaN values found in attn_output[0]: {num_nans}")
+                print(f'total number of elements in attn_output[0]: {attn_output[0].numel()}')
+                print(f'indices of NaN values in attn_output[0]:')
+                print(nan_indices)
+
+                # how many False values in attn_mask, print the indices 
+                attn_mask0 = attn_mask[0]
+                print(f'attn_mask0.shape={attn_mask0.shape}')
+                n_false = torch.sum(attn_mask0 == False)
+                n_true = torch.sum(attn_mask0 == True)
+                print(f'number of False values in attn_mask[0]: {n_false}')
+                print(f'number of True values in attn_mask[0]: {n_true}')
+                print()
+                
+                true_indices = (attn_mask0 == True).nonzero(as_tuple=False)
+                print(f'indices of True values in attn_mask[0]:')
+                print(true_indices)
+
+
+                print()
+                print()
+                nan_mask1 = torch.isnan(attn_output[1])
+
+                # Get the indices of NaN values
+                nan_indices = nan_mask1.nonzero(as_tuple=False)
+
+                # Print the number of NaNs found
+                num_nans = nan_indices.size(0)
+                print(f"Total NaN values found in attn_output[0]: {num_nans}")
+                print(f'total number of elements in attn_output[0]: {attn_output[1].numel()}')
+                print(f'indices of NaN values in attn_output[0]:')
+                print(nan_indices)
+
+                # how many False values in attn_mask, print the indices 
+                attn_mask1 = attn_mask[1]
+                print(f'attn_mask0.shape={attn_mask1.shape}')
+                n_false = torch.sum(attn_mask1 == False)
+                n_true = torch.sum(attn_mask1 == True)
+                print(f'number of False values in attn_mask[0]: {n_false}')
+                print(f'number of True values in attn_mask[0]: {n_true}')
+                print()
+                
+                true_indices = (attn_mask1 == True).nonzero(as_tuple=False)
+                print(f'indices of True values in attn_mask[1]]:')
+                print(true_indices)
 
             # Skip connection
             x2 = encoded_patches + attn_output
 
             # Second norm
             x3 = self.transformer_norms_2[i](x2)
-            print()
-            print(f'x3.shape={x3.shape}')
-            print(f'x3[:1, :5, :5]: {x3[:1, :5, :5]}')
-
-            if torch.isnan(x3).any():
-                print()
-                print('WARNING')
-                print(f'x3 has NaNs')
-                print()
-
+            
             # MLP
             x3 = self.transformer_fc1[i](x3)
-            print()
-            print(f'x3.shape={x3.shape}')
-            print(f'x3[:1, :5, :5]: {x3[:1, :5, :5]}')
-
-
+            
             x3 = torch.nn.functional.gelu(x3) 
             x3 = self.transformer_fc2[i](x3)
             x3 = torch.nn.functional.gelu(x3)
-            print()
-            print(f'x3.shape={x3.shape}')
-            print(f'x3[:1, :5, :5]: {x3[:1, :5, :5]}')
-            if torch.isnan(x3).any():
-                print()
-                print('WARNING')
-                print(f'x3 has NaNs')
-                print()
-            
-            #if i == 0:
-            #    time.sleep(5)
 
             # Another skip connection
             encoded_patches = x2 + x3
