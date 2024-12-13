@@ -323,7 +323,6 @@ class GSGM(nn.Module):
         cond = torch.tensor(cond, dtype=torch.float32, device=self.device)
         self.ema_jet = self.ema_jet.to(self.device)
         self.ema_part = self.ema_part.to(self.device)
-        #print(f'cond.device={cond.device}')
 
         # cond: torch.Tensor of shape [B, num_cond]
         # data_shape=[cond.shape[0],2,self.num_jet]
