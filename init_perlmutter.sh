@@ -22,5 +22,6 @@ uproot \
 matplotlib==3.6.2 \
 mplhep==0.3.26 \
 PyYAML==6.0.1 \
+torchinfo
 
 

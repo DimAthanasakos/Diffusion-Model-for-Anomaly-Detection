@@ -12,6 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
 from Models.deepsets_cond import DeepSetsClass
+from torchinfo import summary
 
 # Assume we have equivalent utilities in PyTorch:
 import utils  # must be adjusted to PyTorch-compatible
@@ -20,6 +21,9 @@ from sklearn.metrics import roc_curve, auc
 from sklearn.utils import shuffle
 from sklearn.model_selection import train_test_split
 import energyflow as ef
+
+
+torch.manual_seed(1233)
 
 
 def recover_jet(jet, part):
@@ -139,11 +143,16 @@ def model_train(model, SR, train_loader, val_loader, optimizer, criterion, MAX_E
         train_labs = []
         t_start = time.time()
         for index, batch_data in enumerate(train_loader):
+
             batch_data = [data.to(device) for data in batch_data]
             if SR:
                 sample_j_b, sample_p_b, mask_b, labels_b, w_b = batch_data
                 optimizer.zero_grad()
                 outputs = model(sample_j_b, sample_p_b, mask_b)
+
+                #if index == 0 and epoch == 0 :
+                #    summary(model, input_data=[sample_j_b, sample_p_b, mask_b])
+
             else:
                 sample_j_b, sample_p_b, mask_b, mjj_b, labels_b, w_b = batch_data
                 optimizer.zero_grad()
@@ -212,8 +221,6 @@ def model_train(model, SR, train_loader, val_loader, optimizer, criterion, MAX_E
             best_auc = auc_res
             torch.save(model.state_dict(), "checkpoint.pt")
 
-    # After training, evaluate on full dataset or test set as needed
-    # Similar logic for predictions and AUC calculation
 
 
 
@@ -235,14 +242,14 @@ if __name__ == "__main__":
     parser.add_argument('--hamb', action='store_true', default=False,help='Load Hamburg team dataset')
     parser.add_argument('--reweight', action='store_true', default=False,help='Apply mjj based reweighting to SR events')
     parser.add_argument('--nsig', type=int,default=2500,help='Number of injected signal events')
-    parser.add_argument('--nbkg', type=int,default=10000,help='Number of injected signal events')
+    parser.add_argument('--nbkg', type=int,default=100000,help='Number of injected signal events')
     parser.add_argument('--nid', type=int,default=0,help='Independent training ID')
     parser.add_argument('--large', action='store_true', default=False,help='Train with a large model')
     parser.add_argument('--data_file', default='', help='File to load')
 
-    parser.add_argument('--LR', type=float,default=1e-3,help='learning rate')
+    parser.add_argument('--LR', type=float,default=1e-4,help='learning rate')
     parser.add_argument('--MAX-EPOCH', type=int,default=1,help='maximum number of epochs for the training')
-    parser.add_argument('--BATCH-SIZE', type=int,default=256,help='Batch size')
+    parser.add_argument('--BATCH-SIZE', type=int,default=128,help='Batch size')
     flags = parser.parse_args()
 
 
@@ -342,12 +349,20 @@ if __name__ == "__main__":
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE)
 
     # Initialize model
-    model = DeepSetsClass(num_heads=2, num_transformer=4, projection_dim=64, use_cond=(not flags.SR), device=device)
+    model = DeepSetsClass(num_heads=1, num_transformer=4, projection_dim=64, use_cond=(not flags.SR), num_part_features=config['NUM_FEAT'], num_jet_features=config['NUM_JET'], device=device)
+
+    print()
+    print(model)
+    print()
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total trainable parameters: {total_params}")
+    print()
+
+
     model.to(device)
 
     optimizer = torch.optim.Adamax(model.parameters(), lr=LR)
     criterion = nn.BCELoss(reduction='none')  # We'll apply weights manually
-
 
 
     model_train(model, flags.SR, train_loader, val_loader, optimizer, criterion, MAX_EPOCH, data_j, data_p, labels, device)

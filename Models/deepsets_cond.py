@@ -134,101 +134,137 @@ class DeepSetsAtt(nn.Module):
 
 
 
-def make_patches(inputs, projection_dim):
-    l1 = nn.Linear(inputs.size(-1), projection_dim).to(inputs.device)
-    l2 = nn.Linear(projection_dim, projection_dim).to(inputs.device)
-    tdd = l1(inputs)
-    tdd = F.leaky_relu(tdd, negative_slope=0.01)
-    encoded_patches = l2(tdd)
-    return encoded_patches
+# The Block class that is used to model both the jet and the particle branches during classification of the data
+class Branch(nn.Module):
+    def __init__(self, num_features = 3, num_heads=1, num_transformer=8, projection_dim=256, ispart = False, use_cond=False, device='cpu'):
+        super().__init__()
+        self.num_heads = num_heads
+        self.num_transformer = num_transformer
+        self.projection_dim = projection_dim
+        self.use_cond = use_cond
+        self.device = device
+        self.num_features = num_features
+        self.ispart = ispart
+
+        # Define encode layers
+        self.encode_layer = nn.Linear(self.num_features, projection_dim)
+
+        # Define make_patches layers
+        self.patch_layer1 = nn.Linear(projection_dim, projection_dim)
+        self.patch_layer2 = nn.Linear(projection_dim, projection_dim)
+
+        # Define transformer layers
+        self.attention_layers = nn.ModuleList([
+            nn.MultiheadAttention(embed_dim=projection_dim, num_heads=num_heads, batch_first=True, dropout=0.1)
+            for _ in range(num_transformer)])
+        
+        self.norm_layers = nn.ModuleList([nn.LayerNorm(projection_dim) for _ in range(2 * num_transformer)])
+        self.norm_layer_final = nn.LayerNorm(projection_dim)
+
+        
+        self.fc_layers_trans = nn.ModuleList([  nn.ModuleList([ 
+            nn.Linear(projection_dim, 4 * projection_dim), nn.Linear(4 * projection_dim, projection_dim) ]) 
+            for _ in range(self.num_transformer) ])
+
+        if use_cond:
+            self.cond_fc = nn.Linear(projection_dim, projection_dim)
 
 
-def encode(inputs, projection_dim):
-    l = nn.Linear(inputs.size(-1), projection_dim).to(inputs.device)
-    masked_features = l(inputs)
-    masked_features = F.leaky_relu(masked_features, negative_slope=0.01)
-    return masked_features
+    def make_patches(self, inputs,):
+        tdd = self.patch_layer1(inputs)
+        tdd = F.leaky_relu(tdd, negative_slope=0.01)
+        encoded_patches = self.patch_layer2(tdd)
+        return encoded_patches
 
 
-def transformer(encoded_patches, num_transformer, num_heads, projection_dim, mask_matrix=None):
-    for _ in range(num_transformer):
-        # Layer normalization 1
-        norm1 = nn.LayerNorm(encoded_patches.size(-1)).to(encoded_patches.device) 
-        x1 = norm1(encoded_patches)
+    def encode(self, inputs):
+        masked_features = self.encode_layer(inputs)
+        masked_features = F.leaky_relu(masked_features, negative_slope=0.01)
+        return masked_features
 
-        # Multi-head attention
-        attn_layer = nn.MultiheadAttention(embed_dim=projection_dim, num_heads=num_heads, dropout=0.1, batch_first=True).to(encoded_patches.device)
-        attention_output, _ = attn_layer(x1, x1, x1, attn_mask=mask_matrix)
 
-        # Skip connection 1
-        x2 = x1 + attention_output
+    def transformer(self, encoded_patches, mask_matrix=None):
 
-        # Layer normalization 2
-        norm2 = nn.LayerNorm(x2.size(-1)).to(encoded_patches.device)
-        x3 = norm2(x2)
-        l1 = nn.Linear(projection_dim, 4 * projection_dim).to(encoded_patches.device)
-        x3 = l1(x3)
-        x3 = F.gelu(x3)
-        l2 = nn.Linear(4 * projection_dim, projection_dim).to(encoded_patches.device)
-        x3 = l2(x3)
-        x3 = F.gelu(x3)
+        for i in range(self.num_transformer):
+            # Layer normalization 
+            norm1 = self.norm_layers[2 * i]
+            norm2 = self.norm_layers[2 * i + 1]
+            fc_l = self.fc_layers_trans[i]
 
-        # Skip connection 2
-        encoded_patches = x2 + x3
-    last_norm = nn.LayerNorm(encoded_patches.size(-1)).to(encoded_patches.device)
-    representation = last_norm(encoded_patches)
-    return representation
+            x1 = norm1(encoded_patches)
+            attn_output, _ = self.attention_layers[i](x1, x1, x1, attn_mask=mask_matrix)
+            x2 = x1 + attn_output
+
+            x3 = norm2(x2)
+            x3 = fc_l[0](x3)
+            x3 = F.gelu(x3)
+            x3 = fc_l[1](x3)
+            x3 = F.gelu(x3)
+
+            encoded_patches = x2 + x3
+
+        representation = self.norm_layer_final(encoded_patches)
+        return representation
+
+
+    def forward(self, inputs, mask=None, cond_embedding=None, attn_matrix=None):
+        inputs = inputs.to(self.device)
+        mask = mask.to(self.device) if mask is not None else None
+        npart = inputs.size(2)        
+        
+        # for the particle branch we need to reshape the inputs by flattening the two jets into one
+        if self.ispart:
+            inputs= inputs.view(-1, npart, inputs.size(-1))
+
+        masked_features = self.encode(inputs)
+
+        # Add conditional embedding if use_cond is True
+        if self.ispart and self.use_cond and cond_embedding is not None:
+            cond = self.cond_fc(cond_embedding)
+            cond = F.leaky_relu(cond, negative_slope=0.01)
+            cond = cond.unsqueeze(1).repeat(1, npart, 1)
+            masked_features = torch.cat([masked_features, cond], dim=-1)
+
+        # Transformer encoding for particles
+        encoded_patches = self.make_patches(masked_features)
+        representation = self.transformer(encoded_patches, attn_matrix)
+
+        # For the particle branch we need to reshape the representation into [B, num_particles*n_jets=2, projection_dim]
+        if self.ispart:
+            representation = representation.view(-1, 2*npart, self.projection_dim)
+
+        return representation 
+    
 
 
 class DeepSetsClass(nn.Module):
-    def __init__(self, num_heads=1, num_transformer=8, projection_dim=256, use_cond=False, device='cpu'):
+    def __init__(self, num_part_features = 3, num_jet_features = 5, num_heads=1, num_transformer=8, projection_dim=256, use_cond=False, device='cpu'):
         super(DeepSetsClass, self).__init__()
         self.num_heads = num_heads
         self.num_transformer = num_transformer
         self.projection_dim = projection_dim
         self.use_cond = use_cond
         self.device = device
+        self.num_part_features = num_part_features
+        self.num_jet_features = num_jet_features
 
-        # Conditional embedding layer (if use_cond is True)
-        if use_cond:
-            self.cond_fc = nn.Linear(projection_dim, projection_dim)
+        self.particle_branch = Branch(num_features=num_part_features, num_heads=num_heads, num_transformer=num_transformer, projection_dim=projection_dim, ispart=True, use_cond=use_cond, device=device)
+
+        self.jet_branch = Branch(num_features=num_jet_features, num_heads=num_heads, num_transformer=num_transformer, projection_dim=projection_dim, ispart=False, use_cond=False, device=device)
 
         # Output layers
-        self.merged_fc1 = nn.Linear(projection_dim, 2*projection_dim)     # change 1 to 2*projection_dim
+        self.merged_fc1 = nn.Linear(projection_dim, 2*projection_dim)     
         self.merged_fc2 = nn.Linear(2 * projection_dim, projection_dim)
         self.merged_fc3 = nn.Linear(projection_dim, 1)
-
 
     def forward(self, inputs_jet, inputs_particle, mask=None, cond_embedding=None):
         inputs_jet = inputs_jet.to(self.device)
         inputs_particle = inputs_particle.to(self.device)
         mask = mask.to(self.device) if mask is not None else None
         
-        npart = inputs_particle.size(2)
-
-        # Reshape inputs and mask
-        inputs_reshape = inputs_particle.view(-1, npart, inputs_particle.size(-1))
-
-        if mask is not None:
-            mask_matrix = torch.matmul(mask, mask.transpose(1,2))  # [B,N,N]
-            # Pytorch MultiheadAttention expects attn_mask to be of shape [batch_size * num_heads, ...]
-            # so we repeat the mask_matrix num_heads times
-            mask_matrix = mask_matrix.unsqueeze(1).repeat(1, self.num_heads, 1, 1)
-            mask_matrix = mask_matrix.view(-1, mask_matrix.size(-2), mask_matrix.size(-1))
-
-            # Convert mask_matrix to attention mask
-            attn_matrix = mask_matrix.clone()
-            attn_matrix[attn_matrix != 0] = float('-inf')
-            attn_matrix[attn_matrix == 0] = 0.0
-        else:
-            attn_matrix = None
-
-        mask_reshape = mask.view(-1, npart, 1) if mask is not None else None
-        # Encode masked features and jet features
-        masked_features = encode(inputs_reshape, self.projection_dim)
-        jet_features = encode(inputs_jet, self.projection_dim)
-
-
+        npart = inputs_particle.size(2)        
+        
+        mask_reshape = mask.view(-1, npart, 1) if mask is not None else None        
         # Create mask matrix for attention
         if mask_reshape is not None:
             mask_matrix = torch.matmul(mask_reshape, mask_reshape.transpose(1, 2))
@@ -242,29 +278,15 @@ class DeepSetsClass(nn.Module):
             attn_matrix = None
 
 
-        # Add conditional embedding if use_cond is True
-        if self.use_cond and cond_embedding is not None:
-            cond = self.cond_fc(cond_embedding)
-            cond = F.leaky_relu(cond, negative_slope=0.01)
-            cond = cond.unsqueeze(1).repeat(1, npart, 1)
-            masked_features = torch.cat([masked_features, cond], dim=-1)
+        # Particles branch
+        representation_part = self.particle_branch(inputs_particle, mask=mask, cond_embedding=cond_embedding, attn_matrix=attn_matrix)
 
-        # Transformer encoding for particles
-        encoded_patches = make_patches(masked_features, self.projection_dim)
-        representation = transformer(encoded_patches, self.num_transformer, self.num_heads, self.projection_dim, attn_matrix)
-
-        # right now representation is [B*num_particles, n_jets = 2, projection_dim]
-        # we want to reshape it to [B, num_particles*n_jets, projection_dim]
-        representation = representation.view(-1, 2*npart, self.projection_dim)
+        # Jets branch
+        representation_jet = self.jet_branch(inputs_jet, mask=mask, cond_embedding=None, attn_matrix=None)
 
 
-        # Transformer encoding for jets
-        encoded_patches_jet = make_patches(jet_features, self.projection_dim)
-        representation_jet = transformer(encoded_patches_jet, self.num_transformer, self.num_heads, self.projection_dim)
-        # reshape representation and representation_jet ?? 
-
-        # Merge representations
-        merged = torch.cat([representation, representation_jet], dim=-2)
+        # Merge the two branches
+        merged = torch.cat([representation_part, representation_jet], dim=-2)
 
         merged = self.merged_fc1(merged)
         merged = F.dropout(merged, p=0.1, training=self.training) # self.training is a boolean flag toggled by model.train() and model.eval()
@@ -279,3 +301,6 @@ class DeepSetsClass(nn.Module):
         outputs = torch.sigmoid(self.merged_fc3(merged))
 
         return outputs
+
+
+
