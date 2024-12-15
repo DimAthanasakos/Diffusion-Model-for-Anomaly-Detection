@@ -5,7 +5,7 @@
 #------------------------------------------------------------------
 
 # How many events to load for training
-n_events: 1000
+n_events: 1000000
 
 # How many events to sample
 n_events_sample: 1000
@@ -17,7 +17,7 @@ NUM_COND:   1
 BATCH:      128
 LR:         0.0003
 MAXEPOCH:   50
-EARLYSTOP:  3
+EARLYSTOP:  15
 EMBED:      64
 MAX_STEPS:  512   # The number of sampling steps
 NORM:       'mean'

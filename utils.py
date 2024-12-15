@@ -10,6 +10,9 @@ from sklearn.utils import shuffle
 import torch
 import pandas as pd
 import energyflow as ef
+from torch.utils.data.distributed import DistributedSampler
+
+
 
 #import energyflow as ef
 
@@ -214,14 +217,6 @@ def SimpleLoader(data_path,file_name,use_SR=False,
         mask = h5f['mask'][:]
         particles = np.concatenate([particles,mask],-1)
 
-
-    if not use_SR:
-        #Load validation split
-        particles = particles[:int(0.65*jets.shape[0])]
-        mask = mask[:int(0.65*jets.shape[0])]
-        jets = jets[:int(0.65*jets.shape[0])]
-    
-        
     p4_jets = ef.p4s_from_ptyphims(jets)
     # get mjj from p4_jets
     sum_p4 = p4_jets[:, 0] + p4_jets[:, 1]
@@ -237,6 +232,13 @@ def SimpleLoader(data_path,file_name,use_SR=False,
     mjj = mjj[(mask_region) & (mask_mass)]
     jets = jets[(mask_region) & (mask_mass)]
     jets[:,:,-1][jets[:,:,-1]<0] = 0.
+    
+    if not use_SR: # should nt this be the 10% not used for training in order to have a fair comparison?
+        #Load validation split
+        particles = particles[:int(0.9*jets.shape[0])]
+        mask = mask[:int(0.9*jets.shape[0])]
+        jets = jets[:int(0.9*jets.shape[0])]
+    
     
     mask = np.expand_dims(particles[:,:,:,-1],-1)
     return particles[:,:,:,:-1]*mask,jets,mjj
@@ -324,6 +326,7 @@ def DataLoader(data_path,file_name,
                npart,
                n_events,
                n_events_sample = 500,
+               ddp = False,
                rank=0,size=1,
                batch_size=64,
                make_torch_data=True,
@@ -409,26 +412,38 @@ def DataLoader(data_path,file_name,
     # train using only the sidebands
     mask_region = get_mjj_mask(mjj,use_SR,mjjmin,mjjmax)              # Only events in the sideband region (~80% of the events)
     mask_mass = (np.abs(jets[:,0,0])>0.0) & (np.abs(jets[:,1,0])>0.0) # Both jet have non-zero p_T (not zero padded events)
+  
+    #how many events outside mask_region and mask_mass
+    if rank == 0:
+        print(f'Number of events outside mask_region: {np.sum(~mask_region)}')
+        print()
+        print(f'Number of events inside mask_region: {np.sum(mask_region)}')
+        print()
 
     particles = particles[(mask_region) & (mask_mass)]
     mjj = mjj[(mask_region) & (mask_mass)]
     jets = jets[(mask_region) & (mask_mass)]
+
     jets[:,:,-1][jets[:,:,-1]<0] = 0.
+    #print(f'After masking with mask_region and mask_mass: {particles.shape}')
+    #print(f'mjj.shape: {mjj.shape}')
+    #print(f'jets.shape: {jets.shape}')
 
     if make_torch_data:
-        # roughly 65%:35% split and rank-based slicing
+        # roughly 90%:10% split and rank-based slicing
         # original code: particles = particles[rank:int(0.65*nevts):size]
         # But note that we must recalculate based on (mask_region & mask_mass).
         # We'll assume the indexing logic as is:
         total_events = particles.shape[0]
-        selected_indices = np.arange(total_events)[rank:int(0.65 * total_events):size]
+        selected_indices = np.arange(total_events)[:int(0.90 * total_events)]
         particles = particles[selected_indices]
         jets = jets[selected_indices]
         mjj = mjj[selected_indices]    
     else:
+        # This will be activated when we only want to load the data to compare the results with the generated data
         if not use_SR:
             total_events = particles.shape[0]
-            sliced_start = int(0.65 * total_events)
+            sliced_start = int(0.90 * total_events)
             particles = particles[sliced_start:]
             jets = jets[sliced_start:]
             mjj = mjj[sliced_start:]
@@ -446,7 +461,7 @@ def DataLoader(data_path,file_name,
     mjj = prep_mjj(mjj, mjjmin, mjjmax)
     
     if make_torch_data:
-        #roughly 60% train and 5% test
+        #roughly 90% train and 10% test
         split_index = int(0.9 * data_size)
         train_particles = particles[:split_index]
         train_jets = jets[:split_index]
@@ -478,8 +493,10 @@ def DataLoader(data_path,file_name,
         train_dataset = torch.utils.data.TensorDataset(train_particles_t, train_jets_t, train_mjj_t, train_mask_t)
         test_dataset = torch.utils.data.TensorDataset(test_particles_t, test_jets_t, test_mjj_t, test_mask_t)
 
+        train_sampler = DistributedSampler(train_dataset) if ddp else None
+
         # Create DataLoaders
-        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, sampler = train_sampler)
         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
 
         return data_size, train_loader, test_loader

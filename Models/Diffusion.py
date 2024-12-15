@@ -29,21 +29,12 @@ def base_Embedding(inputs, projection):
     sin_angle = torch.sin(angle)        # Compute sine
     cos_angle = torch.cos(angle)        # Compute cosine
     embedding = torch.cat([sin_angle, cos_angle], dim=-1)  # Concatenate along the last dimension
-
-    #dense1 = nn.Linear(2*num_embed, 2*num_embed) # since we are concatenating sin and cos along the last dimension
-    #dense2 = nn.Linear(2*num_embed, num_embed)
-    
-    #embedding = activation(dense1(embedding))
-    #embedding = activation(dense2(embedding))
-
     return embedding
-
 
 
 def prior_sde(dimensions, device='cpu'):
     # returns normal noise given the dimensions
     return torch.randn(dimensions, dtype=torch.float32, device=device)
-
 
 
 def FF(features, min_proj=4, max_proj=8, device='cpu'):
@@ -311,11 +302,25 @@ class GSGM(nn.Module):
 
     def forward(self, part, jet, cond, mask, t): # NOTE: This forward requires the same t for both jet and part, which is not necessarily true during training
         jet_pred = self.forward_jet(jet, t, cond)
-        part_pred = self.forward_part(part, t, jet, cond, mask)
+        
+        # for part, we need to reshape part, jet, cond, mask
+        num_part = part.size(2)
+        part_reshaped = part.reshape(-1, num_part, self.num_feat)  # [B*2, N, num_feat]
+        mask_reshaped = mask.reshape(-1, num_part, 1)               # [B*2, N, 1]
+        jet_reshaped = jet.reshape(-1, self.num_jet)               # [B*2, num_jet]
+        cond_expanded = cond.unsqueeze(1)                           # [B,1,num_cond]
+        cond_tiled = cond_expanded.repeat(1,2,1)          # [B,2,num_cond]
+        cond_reshaped = cond_tiled.reshape(-1, 1)         # [B*2,1]
+        random_t_replicated = t.repeat(2, 1)
+
+        part_pred = self.forward_part(part_reshaped, random_t_replicated, jet_reshaped, cond_reshaped, mask_reshaped)
         return jet_pred, part_pred
 
 
+
 #----------------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------------
+
 
     def generate(self, cond):
         start = time.time()

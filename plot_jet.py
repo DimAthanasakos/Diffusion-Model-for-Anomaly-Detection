@@ -87,6 +87,8 @@ if __name__ == "__main__":
         sample_name += '_Hamburg'
     n_events_sample = config['n_events_sample']
 
+
+    # Load the actual data of LHCO as comparison to the generated data
     particles, jets, logmjj, _ = utils.DataLoader(flags.data_folder,
                                                   flags.file_name,
                                                   npart=flags.npart,
