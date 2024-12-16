@@ -382,7 +382,7 @@ class GSGM(nn.Module):
             particles.append(parts * mask)  # Apply mask
 
         end = time.time()
-        print("Time for sampling {} events is {} seconds".format(cond.shape[0], end - start))
+        #print("Time for sampling {} events is {} seconds".format(cond.shape[0], end - start))
 
         # Stack along the jet dimension: result shape [B,2,max_part,num_feat]
         return np.stack(particles, 1), jets

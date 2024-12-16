@@ -151,8 +151,10 @@ def HistRoutine(feed_dict,
                 fig = None, gs = None,
                 plot_ratio= True,
                 idx = None,
-                label_loc='best'):
+                label_loc='best',
+                rank = -1):
     assert reference_name in feed_dict.keys(), "ERROR: Don't know the reference distribution"
+    #print(f'called HistRoutine with xlabel: {xlabel} and rank: {rank}')
 
     if fig is None:
         fig, gs = SetGrid(plot_ratio) 
@@ -441,18 +443,21 @@ def DataLoader(data_path,file_name,
         mjj = mjj[selected_indices]    
     else:
         # This will be activated when we only want to load the data to compare the results with the generated data
+        # for example, when we want to load the data in the SB region to use as condition to generate data and 
+        # then compare them in the plot_jet.py
         if not use_SR:
             total_events = particles.shape[0]
             sliced_start = int(0.90 * total_events)
-            particles = particles[sliced_start:]
-            jets = jets[sliced_start:]
-            mjj = mjj[sliced_start:]
+            sliced_indices = np.arange(sliced_start, total_events)[rank::size]
+            particles = particles[sliced_indices]
+            jets = jets[sliced_indices]
+            mjj = mjj[sliced_indices]
 
     particles, jets, mjj = shuffle(particles,jets,mjj, random_state=0)
     data_size = jets.shape[0]
 
     if rank == 0:
-        print(f'After masking with use_SR: {use_SR} : data_size: {data_size}')
+        print(f'For a single GPU, after masking with use_SR: {use_SR} : data_size: {data_size}')
         print()
 
     particles, jets = _preprocessing(particles, jets, mjj)
@@ -493,13 +498,8 @@ def DataLoader(data_path,file_name,
         train_dataset = torch.utils.data.TensorDataset(train_particles_t, train_jets_t, train_mjj_t, train_mask_t)
         test_dataset = torch.utils.data.TensorDataset(test_particles_t, test_jets_t, test_mjj_t, test_mask_t)
 
-        train_sampler = DistributedSampler(train_dataset) if ddp else None
 
-        # Create DataLoaders
-        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, sampler = train_sampler)
-        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
-
-        return data_size, train_loader, test_loader
+        return data_size, train_dataset, test_dataset
   
     else:
         # Sampling case

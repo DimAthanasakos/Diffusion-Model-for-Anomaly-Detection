@@ -10,6 +10,8 @@ import argparse
 import time
 import utils
 from torchinfo import summary
+from torch.utils.data.distributed import DistributedSampler
+
 
 
 torch.manual_seed(1233)
@@ -134,7 +136,7 @@ if __name__ == "__main__":
         batch_size = batch_size // torch.cuda.device_count() # Adjust batch size for DDP
         if local_rank==0: print(f'Batch size per GPU: {batch_size}')
 
-    data_size, train_loader, val_loader = utils.DataLoader(flags.data_path,
+    data_size, train_data, val_data = utils.DataLoader(flags.data_path,
                                                             flags.file_name,
                                                             flags.npart,
                                                             ddp = set_ddp,
@@ -206,9 +208,15 @@ if __name__ == "__main__":
     no_improve_count = 0
 
 
+    # create torch DataLoaders
+    train_sampler = DistributedSampler(train_data) if set_ddp else None
+    train_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, sampler = train_sampler)
+    val_loader = torch.utils.data.DataLoader(val_data, batch_size=batch_size, shuffle=True)
 
     for epoch in range(config['MAXEPOCH']):
         model.train()
+        if set_ddp: train_sampler.set_epoch(epoch)  
+
         epoch_loss = 0
         epoch_loss_part = 0
         epoch_loss_jet = 0
@@ -238,7 +246,7 @@ if __name__ == "__main__":
 
             epoch_loss += loss.item() * part.size(0)
             epoch_loss_part += loss_part.item() 
-            epoch_loss_jet += loss_jet.item()                # Multiply by 2 since we have 2 jets per event
+            epoch_loss_jet += loss_jet.item()               
 
             count += part.size(0)
 
