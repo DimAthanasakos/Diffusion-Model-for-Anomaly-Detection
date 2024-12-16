@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from Models.deepsets_cond import DeepSetsClass
 from torchinfo import summary
 
@@ -122,7 +123,7 @@ def class_loader(data_path,
 
 
 
-def model_train(model, SR, train_loader, val_loader, optimizer, criterion, MAX_EPOCH, data_j,data_p,labels,device):
+def model_train(model, SR, train_loader, val_loader, train_sampler, optimizer, criterion, MAX_EPOCH, data_j,data_p,labels,device, set_ddp, rank):
     # Training loop
     best_auc = 0
     if SR:
@@ -133,10 +134,11 @@ def model_train(model, SR, train_loader, val_loader, optimizer, criterion, MAX_E
         labels = torch.tensor(labels, dtype=torch.float32, device=device)
 
         dataset = TensorDataset(data_j, data_p, mask_t, labels)
-        loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False)
+        SR_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
     for epoch in range(MAX_EPOCH):
         model.train()
+        if set_ddp: train_sampler.set_epoch(epoch)  
         total_loss = 0
         total_count = 0
         train_preds = []
@@ -196,30 +198,32 @@ def model_train(model, SR, train_loader, val_loader, optimizer, criterion, MAX_E
         fpr, tpr, _ = roc_curve(val_labs, val_preds, pos_label=1)
         auc_val = auc(fpr, tpr)
         
-        print(f"Epoch {epoch+1}/{MAX_EPOCH}, Train Loss: {avg_loss:.4f}, Train AUC: {auc_res:.4f}, val AUC: {auc_val:.4f}, Time: {time.time()-t_start:.2f}s")
+        if rank == 0:
+            print(f"Epoch {epoch+1}/{MAX_EPOCH}, Train Loss: {avg_loss:.4f}, Train AUC: {auc_res:.4f}, val AUC: {auc_val:.4f}, Time: {time.time()-t_start:.2f}s")
 
+            # test on signal vs background from the data 
+            if SR:
+                tot_preds, tot_labs = [], []
+                for batch_data in SR_loader:
+                    batch_data = [data.to(device) for data in batch_data]
+                    sample_j_b, sample_p_b, mask_b, labels_b = batch_data
+                    pred = model(sample_j_b, sample_p_b, mask_b)
+                    pred = pred.detach().cpu().numpy()
+                    tot_preds.append(pred)
+                    tot_labs.append(labels_b.cpu().numpy())
 
-        # test on signal vs background from the data 
-        if SR:
-            tot_preds, tot_labs = [], []
-            for batch_data in loader:
-                batch_data = [data.to(device) for data in batch_data]
-                sample_j_b, sample_p_b, mask_b, labels_b = batch_data
-                pred = model(sample_j_b, sample_p_b, mask_b)
-                pred = pred.detach().cpu().numpy()
-                tot_preds.append(pred)
-                tot_labs.append(labels_b.cpu().numpy())
+                tot_preds = np.concatenate(tot_preds)
+                tot_labs = np.concatenate(tot_labs)
 
-            tot_preds = np.concatenate(tot_preds)
-            tot_labs = np.concatenate(tot_labs)
+                fpr, tpr, _ = roc_curve(tot_labs, tot_preds, pos_label=1)
+                auc_res = auc(fpr, tpr)
+                print(f"AUC on signal vs data background: {auc_res:.4f}")
+                print(f'============================')
+                
 
-            fpr, tpr, _ = roc_curve(tot_labs, tot_preds, pos_label=1)
-            auc_res = auc(fpr, tpr)
-            print(f"AUC on signal vs data background: {auc_res:.4f}")
-            print(f'============================')
-        if auc_res > best_auc:
-            best_auc = auc_res
-            torch.save(model.state_dict(), "checkpoint.pt")
+            if auc_res > best_auc:
+                best_auc = auc_res
+                torch.save(model.state_dict(), "checkpoint.pt")
 
 
 
@@ -228,8 +232,6 @@ def model_train(model, SR, train_loader, val_loader, optimizer, criterion, MAX_E
 
 if __name__ == "__main__":
     utils.SetStyle()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--data_folder', default='/pscratch/sd/d/dimathan/LHCO/Data/', help='Folder containing data and MC files')
@@ -246,10 +248,12 @@ if __name__ == "__main__":
     parser.add_argument('--nid', type=int,default=0,help='Independent training ID')
     parser.add_argument('--large', action='store_true', default=False,help='Train with a large model')
     parser.add_argument('--data_file', default='', help='File to load')
+    parser.add_argument('--multi', action='store_true', default=False,help='Mutli-GPU training')
 
     parser.add_argument('--LR', type=float,default=1e-4,help='learning rate')
     parser.add_argument('--MAX-EPOCH', type=int,default=1,help='maximum number of epochs for the training')
     parser.add_argument('--BATCH-SIZE', type=int,default=128,help='Batch size')
+   
     flags = parser.parse_args()
 
 
@@ -257,9 +261,25 @@ if __name__ == "__main__":
         config = yaml.safe_load(stream)
 
     MAX_EPOCH = flags.MAX_EPOCH
-    BATCH_SIZE = flags.BATCH_SIZE
     LR = flags.LR
 
+    set_ddp = flags.multi
+    local_rank = 0
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    print()
+    if set_ddp:
+        local_rank = int(os.environ.get('LOCAL_RANK', 0))
+        if local_rank==0: print('Multi-GPU training')
+        torch.distributed.init_process_group(backend="nccl")
+        torch.cuda.set_device(local_rank)
+    
+    batch_size = flags.BATCH_SIZE
+    if set_ddp:
+        batch_size = batch_size // torch.cuda.device_count() # Adjust batch size for DDP
+        if local_rank==0: print(f'Batch size per GPU: {batch_size}')
+
+    # Load the bckg data with nsig injected signal events if flags.SR is True
     data_j, data_p, data_mjj, labels = class_loader(flags.data_folder,
                                                     flags.file_name,
                                                     npart=flags.npart,
@@ -295,7 +315,7 @@ if __name__ == "__main__":
             
     else: # Load the generated background data from plot_jet.py 
         f = flags.data_file if flags.data_file else sample_name+'.h5'
-        print(f'Loading {f}...')
+        if local_rank==0: print(f'Loading {f}...')
         with h5.File(os.path.join(flags.data_folder,f),"r") as h5f:
             bkg_p = h5f['particle_features'][:]
             bkg_j = h5f['jet_features'][:]
@@ -309,9 +329,9 @@ if __name__ == "__main__":
                                         mjjmin=config['MJJMIN'],mjjmax=config['MJJMAX'])
     
 
-
-    print("Loading {} generated samples and {} data samples".format(bkg_j.shape[0],data_j.shape[0]))
-    print()
+    if local_rank == 0:
+        print(f"Loading {bkg_j.shape[0]} generated samples and {data_j.shape[0]} data samples")
+        print()
 
     # semi_labels = 0 for generated background, 1 for data (including background + signal)
     semi_labels = np.concatenate([np.zeros(bkg_j.shape[0]),np.ones(data_j.shape[0])],0)
@@ -341,22 +361,27 @@ if __name__ == "__main__":
     else:
         dataset = TensorDataset(sample_j_t, sample_p_t, mask_t, mjj_t, semi_labels_t, weights_t)
 
+
     train_size = int(0.9*len(dataset))
     val_size = len(dataset)-train_size
     train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
 
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE)
 
+    # create torch DataLoaders
+    train_sampler = DistributedSampler(train_dataset) if set_ddp else None
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, sampler = train_sampler)
+    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
+   
     # Initialize model
     model = DeepSetsClass(num_heads=1, num_transformer=4, projection_dim=64, use_cond=(not flags.SR), num_part_features=config['NUM_FEAT'], num_jet_features=config['NUM_JET'], device=device)
 
-    print()
-    print(model)
-    print()
-    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Total trainable parameters: {total_params}")
-    print()
+    if local_rank == 0:
+        print()
+        print(model)
+        print()
+        total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Total trainable parameters: {total_params}")
+        print()
 
 
     model.to(device)
@@ -365,7 +390,7 @@ if __name__ == "__main__":
     criterion = nn.BCELoss(reduction='none')  # We'll apply weights manually
 
 
-    model_train(model, flags.SR, train_loader, val_loader, optimizer, criterion, MAX_EPOCH, data_j, data_p, labels, device)
+    model_train(model, flags.SR, train_loader, val_loader, train_sampler, optimizer, criterion, MAX_EPOCH, data_j, data_p, labels, device, set_ddp, local_rank)
 
 
 

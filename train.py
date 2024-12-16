@@ -130,6 +130,7 @@ if __name__ == "__main__":
         if local_rank==0: print('Multi-GPU training')
         torch.distributed.init_process_group(backend="nccl")
         torch.cuda.set_device(local_rank)
+    else: print('Single-GPU (or CPU) training')
     
     batch_size = config['BATCH']
     if set_ddp:
