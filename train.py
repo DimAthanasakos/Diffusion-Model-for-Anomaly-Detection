@@ -133,9 +133,10 @@ if __name__ == "__main__":
     else: print('Single-GPU (or CPU) training')
     
     batch_size = config['BATCH']
+    initial_lr = config['LR'] 
     if set_ddp:
-        batch_size = batch_size // torch.cuda.device_count() # Adjust batch size for DDP
-        if local_rank==0: print(f'Batch size per GPU: {batch_size}')
+        initial_lr = initial_lr * torch.cuda.device_count() # Adjust learning rate for DDP
+
 
     data_size, train_data, val_data = utils.DataLoader(flags.data_path,
                                                             flags.file_name,
@@ -188,11 +189,10 @@ if __name__ == "__main__":
         
 
 
-    initial_lr = config['LR'] 
     optimizer = torch.optim.Adamax(model.parameters(), lr=initial_lr)
 
     steps_per_epoch = int(data_size / config['BATCH'])
-    steps_per_epoch = max(steps_per_epoch, 1)
+    steps_per_epoch = max(steps_per_epoch//torch.cuda.device_count(), 1) 
     total_steps = config['MAXEPOCH'] * steps_per_epoch
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
 

@@ -267,7 +267,6 @@ if __name__ == "__main__":
     local_rank = 0
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    print()
     if set_ddp:
         local_rank = int(os.environ.get('LOCAL_RANK', 0))
         if local_rank==0: print('Multi-GPU training')

@@ -457,7 +457,7 @@ def DataLoader(data_path,file_name,
     data_size = jets.shape[0]
 
     if rank == 0:
-        print(f'For a single GPU, after masking with use_SR: {use_SR} : data_size: {data_size}')
+        print(f'After masking with use_SR: {use_SR} : data_size: {data_size}')
         print()
 
     particles, jets = _preprocessing(particles, jets, mjj)
@@ -497,7 +497,6 @@ def DataLoader(data_path,file_name,
         # Create TensorDatasets
         train_dataset = torch.utils.data.TensorDataset(train_particles_t, train_jets_t, train_mjj_t, train_mask_t)
         test_dataset = torch.utils.data.TensorDataset(test_particles_t, test_jets_t, test_mjj_t, test_mask_t)
-
 
         return data_size, train_dataset, test_dataset
   
