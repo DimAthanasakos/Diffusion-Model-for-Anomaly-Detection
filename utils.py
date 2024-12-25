@@ -24,8 +24,8 @@ line_style = {
 }
 
 colors = {
-    'true':'black',
-    'gen':'#7570b3',
+    'true':'silver',
+    'gen':'firebrick',
 }
 
 name_translate={
@@ -172,11 +172,11 @@ def HistRoutine(feed_dict,
     maxy = np.max(reference_hist)
     
     for ip,plot in enumerate(feed_dict.keys()):
-        dist,_,_=ax0.hist(feed_dict[plot],bins=binning,label=name_translate[plot],linestyle=line_style[plot],color=colors[plot],density=True,histtype="step")
+        dist, _, _ = ax0.hist(feed_dict[plot],bins=binning, density=True, color = colors[plot], label=name_translate[plot], histtype="step" if plot == 'gen' else 'stepfilled')
         if plot_ratio:
             if reference_name!=plot:
                 ratio = 100*np.divide(reference_hist-dist,reference_hist)
-                ax1.plot(xaxis,ratio,color=colors[plot],marker='o',ms=10,lw=0,markerfacecolor='none',markeredgewidth=3)
+                ax1.plot(xaxis,ratio,color=colors[plot],marker='.',ms=8,lw=0,markerfacecolor='none',markeredgewidth=3)
         
     ax0.legend(loc=label_loc,fontsize=12,ncol=5)
 
@@ -192,7 +192,7 @@ def HistRoutine(feed_dict,
         plt.axhline(y=0.0, color='r', linestyle='-',linewidth=1)
         # plt.axhline(y=10, color='r', linestyle='--',linewidth=1)
         # plt.axhline(y=-10, color='r', linestyle='--',linewidth=1)
-        plt.ylim([-30,30])
+        plt.ylim([-50,50])
     else:
         FormatFig(xlabel = xlabel, ylabel = ylabel,ax0=ax0)
     

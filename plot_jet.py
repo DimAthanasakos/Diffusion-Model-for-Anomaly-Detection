@@ -40,7 +40,7 @@ def plot(jet1, jet2, nplots, title, plot_folder, rank = -1):
             'gen': jet2[:,ivar]
         }
 
-        fig, gs, _ = utils.HistRoutine(feed_dict, xlabel=config.var,
+        fig, gs, _ = utils.HistRoutine(feed_dict, xlabel=config.var, binning = config.binning,
                                        plot_ratio=True,
                                        reference_name='true',
                                        ylabel='Normalized entries', logy=config.logy, rank = rank)
@@ -87,7 +87,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--data_folder', default='/pscratch/sd/d/dimathan/LHCO/Data', help='Folder containing data and MC files')    
-    parser.add_argument('--plot_folder', default='/global/homes/d/dimathan/Diffusion-for-Anomaly-Detection-Pytorch/plots', help='Folder to save results')
+    parser.add_argument('--plot_folder', default='/global/homes/d/dimathan/Diffusion-for-Anomaly-Detection-Pytorch/plots/plots_aux', help='Folder to save results')
     parser.add_argument('--file_name', default='processed_data_background_rel.h5', help='File to load')
     parser.add_argument('--npart', default=279, type=int, help='Maximum number of particles')
     parser.add_argument('--config', default='configuration/config.yaml', help='Training parameters')

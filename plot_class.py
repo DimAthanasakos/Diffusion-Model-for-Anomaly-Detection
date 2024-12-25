@@ -23,7 +23,7 @@ class PlottingConfig():
                 r'All Jets $\eta$',
                 r'All Jets $\phi$',
                 r'All Jets mass [GeV]',
-                r'Particle multiplicity',
+                r'Jet Particle multiplicity',
             ]
 
         elif 'High' in self.name:
@@ -36,8 +36,8 @@ class PlottingConfig():
         else:
             name_translate = [
                 r'All particles p$_{Trel}$',
-                r'All particles $\eta$',
-                r'All particles $\phi$',
+                r'All particles $\Delta \eta$',
+                r'All particles $\Delta cd \phi$',
 
             ]
 
@@ -46,11 +46,11 @@ class PlottingConfig():
     def get_binning(self):
         if 'jet' in self.name:
             binning_dict = {
-                0 : np.linspace(1000,2500,55),
-                1 : np.linspace(-2.5,2.5,50),
-                2 : np.linspace(-1.5,1.5,50),
-                3 : np.linspace(100,1100,55),
-                4 : np.linspace(1,200.,200),
+                0 : np.linspace(1000,2500,30),
+                1 : np.linspace(-2.5,2.5,30),
+                2 : np.linspace(-1.5,1.5,30),
+                3 : np.linspace(100,1100,35),
+                4 : np.linspace(1,200.,50),
             }
         elif 'High' in self.name:
             binning_dict = {
@@ -61,9 +61,9 @@ class PlottingConfig():
             }
         else:
             binning_dict = {
-                0 : np.linspace(0,0.9,60),
-                1 : np.linspace(-1,1,50),
-                2 : np.linspace(-1,1,50),
+                0 : np.linspace(0,0.9,30),
+                1 : np.linspace(-1,1,30),
+                2 : np.linspace(-1,1,30),
             }
             
         return binning_dict[self.idx]
