@@ -176,7 +176,7 @@ def HistRoutine(feed_dict,
         if plot_ratio:
             if reference_name!=plot:
                 ratio = 100*np.divide(reference_hist-dist,reference_hist)
-                ax1.plot(xaxis,ratio,color=colors[plot],marker='.',ms=8,lw=0,markerfacecolor='none',markeredgewidth=3)
+                ax1.plot(xaxis,ratio,color=colors[plot],marker='.',ms=15,lw=0,markerfacecolor='none',markeredgewidth=3)
         
     ax0.legend(loc=label_loc,fontsize=12,ncol=5)
 
